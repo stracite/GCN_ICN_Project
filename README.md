@@ -1,5 +1,5 @@
 # GCN_ICN_Project
-This is my graduation project.
+这是我的毕业设计。
 
 本文拟采用“时空图联合建模-多任务学习-动态异常检测”的技术路线：
 首先，构建静态空间图，生成动态时间图，形成时空图结构；
