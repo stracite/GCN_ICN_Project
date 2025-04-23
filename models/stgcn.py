@@ -23,6 +23,7 @@ class STGCN(nn.Module):
                  time_window, num_nodes, num_gcn_layers=2,
                  num_tcn_layers=2, dropout=0.2):
         super().__init__()
+        self.register_buffer('adj', adj_matrix)
         self.num_nodes = num_nodes
         self.time_window = time_window
 

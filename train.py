@@ -47,8 +47,8 @@ class STGCNDispatcher:
             self.model.train()
             train_loss = 0.0
             for inputs, targets in tqdm(train_loader, desc=f"Epoch {epoch + 1}"):
-                inputs = inputs.to(self.device)
-                targets = targets.to(self.device)
+                inputs = inputs.to(self.device, non_blocking=True)  # ✓ 异步传输
+                targets = targets.to(self.device, non_blocking=True)
 
                 self.optimizer.zero_grad()
                 preds, recons = self.model(inputs)
@@ -94,6 +94,15 @@ class STGCNDispatcher:
 
     def _create_loader(self, data, batch_size, shuffle=False):
         """创建数据加载器"""
-        dataset = TensorDataset(torch.FloatTensor(data[0]),
-                                torch.FloatTensor(data[1]))
-        return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+        dataset = TensorDataset(
+            data[0].cpu(),  # ✓ 确保数据在CPU
+            data[1].cpu()
+        )
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            pin_memory=True,  # ✓ 仅对CPU数据有效
+            num_workers=0,  # ✓ Windows必须设为0
+            persistent_workers=False  # ✓ 避免僵尸进程
+        )

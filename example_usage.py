@@ -14,6 +14,11 @@ def main():
     features = 3  # 每个设备的特征数（温度、压力、流量）
     window_size = 24  # 时间窗口大小
 
+    if not torch.cuda.is_available():
+        raise RuntimeError("需要CUDA GPU支持，当前环境无法找到可用GPU")
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
     # 生成模拟数据
     print("生成模拟数据...")
     np.random.seed(42)
@@ -54,7 +59,6 @@ def main():
 
     # ========== 模型初始化 ==========
     print("\n初始化模型...")
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = STGCN(
         node_features=features,
         hidden_dim=64,
@@ -63,7 +67,7 @@ def main():
         num_nodes=num_nodes,
         num_gcn_layers=2,
         num_tcn_layers=2
-    )
+    ).to(device)
     print(f"模型参数量：{sum(p.numel() for p in model.parameters())}")
 
     # ========== 模型训练 ==========
