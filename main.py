@@ -77,7 +77,8 @@ class Main():
         self.model = STGCN(edge_index_sets, len(feature_map),
                            dim=train_config['dim'],
                            input_dim=train_config['slide_win'],
-                           out_layer_num=train_config['out_layer_num']
+                           out_layer_num=train_config['out_layer_num'],
+                           topk=train_config['topk']
                            ).to(self.device)
 
 
@@ -142,7 +143,7 @@ class Main():
         top1_val_info = get_val_performance_data(test_scores, normal_scores, test_labels, topk=1)
 
 
-        print('=========================** Result **============================\n')
+        # print('=========================** Result **============================\n')
 
         info = None
         if self.env_config['report'] == 'best':
@@ -150,9 +151,14 @@ class Main():
         elif self.env_config['report'] == 'val':
             info = top1_val_info
 
-        print(f'F1 score: {info[0]}')
-        print(f'precision: {info[1]}')
-        print(f'recall: {info[2]}\n')
+        self.final_scores = {
+            'f1': info[0],
+            'precision': info[1],
+            'recall': info[2]
+        }
+        # print(f'F1 score: {info[0]}')
+        # print(f'precision: {info[1]}')
+        # print(f'recall: {info[2]}\n')
 
 
     def get_save_path(self, feature_name=''):
@@ -175,66 +181,66 @@ class Main():
 
         return paths
 
-if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument('-batch', help='batch size', type = int, default=128)
-    parser.add_argument('-epoch', help='train epoch', type = int, default=100)
-    parser.add_argument('-slide_win', help='slide_win', type = int, default=15)
-    parser.add_argument('-dim', help='dimension', type = int, default=64)
-    parser.add_argument('-slide_stride', help='slide_stride', type = int, default=5)
-    parser.add_argument('-save_path_pattern', help='save path pattern', type = str, default='')
-    parser.add_argument('-dataset', help='wadi / swat', type = str, default='wadi')
-    parser.add_argument('-device', help='cuda / cpu', type = str, default='cuda')
-    parser.add_argument('-random_seed', help='random seed', type = int, default=0)
-    parser.add_argument('-comment', help='experiment comment', type = str, default='')
-    parser.add_argument('-out_layer_num', help='outlayer num', type = int, default=1)
-    parser.add_argument('-out_layer_inter_dim', help='out_layer_inter_dim', type = int, default=256)
-    parser.add_argument('-decay', help='decay', type = float, default=0)
-    parser.add_argument('-val_ratio', help='val ratio', type = float, default=0.1)
-    parser.add_argument('-topk', help='topk num', type = int, default=20)
-    parser.add_argument('-report', help='best / val', type = str, default='best')
-    parser.add_argument('-load_model_path', help='trained model path', type = str, default='')
-
-    args = parser.parse_args()
-
-    random.seed(args.random_seed)
-    np.random.seed(args.random_seed)
-    torch.manual_seed(args.random_seed)
-    torch.cuda.manual_seed(args.random_seed)
-    torch.cuda.manual_seed_all(args.random_seed)
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
-    os.environ['PYTHONHASHSEED'] = str(args.random_seed)
-
-
-    train_config = {
-        'batch': args.batch,
-        'epoch': args.epoch,
-        'slide_win': args.slide_win,
-        'dim': args.dim,
-        'slide_stride': args.slide_stride,
-        'comment': args.comment,
-        'seed': args.random_seed,
-        'out_layer_num': args.out_layer_num,
-        'out_layer_inter_dim': args.out_layer_inter_dim,
-        'decay': args.decay,
-        'val_ratio': args.val_ratio,
-        'topk': args.topk,
-    }
-
-    env_config={
-        'save_path': args.save_path_pattern,
-        'dataset': args.dataset,
-        'report': args.report,
-        'device': args.device,
-        'load_model_path': args.load_model_path
-    }
-    
-
-    main = Main(train_config, env_config)
-    main.run()
+# if __name__ == "__main__":
+#
+#     parser = argparse.ArgumentParser()
+#
+#     parser.add_argument('-batch', help='batch size', type = int, default=128)
+#     parser.add_argument('-epoch', help='train epoch', type = int, default=100)
+#     parser.add_argument('-slide_win', help='slide_win', type = int, default=15)
+#     parser.add_argument('-dim', help='dimension', type = int, default=64)
+#     parser.add_argument('-slide_stride', help='slide_stride', type = int, default=5)
+#     parser.add_argument('-save_path_pattern', help='save path pattern', type = str, default='')
+#     parser.add_argument('-dataset', help='wadi / swat', type = str, default='wadi')
+#     parser.add_argument('-device', help='cuda / cpu', type = str, default='cuda')
+#     parser.add_argument('-random_seed', help='random seed', type = int, default=0)
+#     parser.add_argument('-comment', help='experiment comment', type = str, default='')
+#     parser.add_argument('-out_layer_num', help='outlayer num', type = int, default=1)
+#     parser.add_argument('-out_layer_inter_dim', help='out_layer_inter_dim', type = int, default=256)
+#     parser.add_argument('-decay', help='decay', type = float, default=0)
+#     parser.add_argument('-val_ratio', help='val ratio', type = float, default=0.1)
+#     parser.add_argument('-topk', help='topk num', type = int, default=20)
+#     parser.add_argument('-report', help='best / val', type = str, default='best')
+#     parser.add_argument('-load_model_path', help='trained model path', type = str, default='')
+#
+#     args = parser.parse_args()
+#
+#     random.seed(args.random_seed)
+#     np.random.seed(args.random_seed)
+#     torch.manual_seed(args.random_seed)
+#     torch.cuda.manual_seed(args.random_seed)
+#     torch.cuda.manual_seed_all(args.random_seed)
+#     torch.backends.cudnn.benchmark = False
+#     torch.backends.cudnn.deterministic = True
+#     os.environ['PYTHONHASHSEED'] = str(args.random_seed)
+#
+#
+#     train_config = {
+#         'batch': args.batch,
+#         'epoch': args.epoch,
+#         'slide_win': args.slide_win,
+#         'dim': args.dim,
+#         'slide_stride': args.slide_stride,
+#         'comment': args.comment,
+#         'seed': args.random_seed,
+#         'out_layer_num': args.out_layer_num,
+#         'out_layer_inter_dim': args.out_layer_inter_dim,
+#         'decay': args.decay,
+#         'val_ratio': args.val_ratio,
+#         'topk': args.topk,
+#     }
+#
+#     env_config={
+#         'save_path': args.save_path_pattern,
+#         'dataset': args.dataset,
+#         'report': args.report,
+#         'device': args.device,
+#         'load_model_path': args.load_model_path
+#     }
+#
+#
+#     main = Main(train_config, env_config)
+#     main.run()
 
 
 

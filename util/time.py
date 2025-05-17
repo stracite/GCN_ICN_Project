@@ -15,13 +15,13 @@ def timeSincePlus(since, percent):
     rs = es - s
     return '%s (- %s)' % (asMinutes(s), asMinutes(rs))
 
-
-def timeSince(since):
-    now = time.time()
-    s = now - since
-    m = math.floor(s / 60)
-    s -= m * 60
-    return '%dm %ds' % (m, s)
-
-def timestamp2str(sec, fmt, tz):
-    return datetime.fromtimestamp(sec).astimezone(tz).strftime(fmt)
+#
+# def timeSince(since):
+#     now = time.time()
+#     s = now - since
+#     m = math.floor(s / 60)
+#     s -= m * 60
+#     return '%dm %ds' % (m, s)
+#
+# def timestamp2str(sec, fmt, tz):
+#     return datetime.fromtimestamp(sec).astimezone(tz).strftime(fmt)

@@ -111,10 +111,10 @@ class STGCN(nn.Module):
 
         # 维度重构 [B, N, D*T] -> [B*T, N, D]
         x = x.view(batch_num, node_num, self.input_dim, seq_len)
-        x = x.permute(0, 3, 1, 2)  # [B, T, N, D]
-        x = x.contiguous().view(-1, node_num, self.input_dim)  # [B*T, N, D]
+        x = x.permute(0, 3, 1, 2)
+        x = x.contiguous().view(-1, node_num, self.input_dim)
         batch_size = x.shape[0]
-        x = x.view(-1, self.input_dim)  # [B*T*N, D]
+        x = x.view(-1, self.input_dim)
 
         # 空间图卷积
         gcn_outs = []
@@ -140,17 +140,17 @@ class STGCN(nn.Module):
             gcn_outs.append(gcn_out)
 
         # 特征聚合
-        x = torch.cat(gcn_outs, dim=1)  # [B*T*N, C]
-        x = x.view(batch_size, node_num, -1)  # [B*T, N, C]
-        x = x.view(batch_num, seq_len, node_num, -1)  # [B, T, N, C]
-        x = x.permute(0, 2, 3, 1)  # [B, N, C, T]
+        x = torch.cat(gcn_outs, dim=1)
+        x = x.view(batch_size, node_num, -1)
+        x = x.view(batch_num, seq_len, node_num, -1)
+        x = x.permute(0, 2, 3, 1)
 
         # 时间卷积处理
 
-        x = x.contiguous().view(batch_num * node_num, -1, seq_len)  # [B*N, C, T]
-        x = self.tcn(x)  # [B*N, C, 1]
-        x = x.squeeze(-1)  # [B*N, C]
-        x = x.view(batch_num, node_num, -1)  # [B, N, C]
+        x = x.contiguous().view(batch_num * node_num, -1, seq_len)
+        x = self.tcn(x)
+        x = x.squeeze(-1)
+        x = x.view(batch_num, node_num, -1)
 
         # 输出处理
         indexes = torch.arange(node_num).to(x.device)

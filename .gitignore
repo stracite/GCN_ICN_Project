@@ -5,5 +5,5 @@ runs/
 temp/
 run_copy.sh
 __pycache__
-SWaT
-WaDi
+SWaT/
+WaDi/
