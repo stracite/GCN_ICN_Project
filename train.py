@@ -1,108 +1,98 @@
-# train.py
 import torch
-from torch.utils.data import DataLoader, TensorDataset
-from tqdm import tqdm
+from test import *
+import torch.nn.functional as F
 
 
-class STGCNDispatcher:
-    """模型训练调度器
-    Args:
-        model (nn.Module): 待训练模型
-        device (torch.device): 训练设备
-        loss_weights (tuple): 损失权重 (pred, recon) (default: (0.7, 0.3))
-        lr (float): 学习率 (default: 1e-3)
-        grad_clip (float): 梯度裁剪阈值 (default: 5.0)
-    """
+# train.py
 
-    def __init__(self, model, device, loss_weights=(0.7, 0.3),
-                 lr=1e-3, grad_clip=5.0):
-        self.model = model.to(device)
-        self.device = device
-        self.weights = loss_weights
-        self.grad_clip = grad_clip
+def loss_func(y_pred, y_true):
+    loss = F.mse_loss(y_pred, y_true, reduction='mean')
 
-        # 损失函数和优化器
-        self.criterion = {
-            'pred': torch.nn.MSELoss(),
-            'recon': torch.nn.L1Loss()
-        }
-        self.optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, 'min', patience=5, verbose=True)
+    return loss
 
-    def train(self, train_data, val_data, epochs=100, batch_size=32):
-        """完整训练流程
-        Args:
-            train_data (tuple): 训练数据 (inputs, targets)
-            val_data (tuple): 验证数据
-            epochs (int): 训练轮次
-            batch_size (int): 批大小
-        """
-        train_loader = self._create_loader(train_data, batch_size, shuffle=True)
-        val_loader = self._create_loader(val_data, batch_size * 2)
 
-        best_loss = float('inf')
-        for epoch in range(epochs):
-            # 训练阶段
-            self.model.train()
-            train_loss = 0.0
-            for inputs, targets in tqdm(train_loader, desc=f"Epoch {epoch + 1}"):
-                inputs = inputs.to(self.device, non_blocking=True)  # ✓ 异步传输
-                targets = targets.to(self.device, non_blocking=True)
 
-                self.optimizer.zero_grad()
-                preds, recons = self.model(inputs)
-                loss = self._compute_loss(preds, recons, targets)
-                loss.backward()
+def train(model = None, save_path = '', config={},  train_dataloader=None, val_dataloader=None, progress_callback=None, should_continue=None):
 
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
-                self.optimizer.step()
+    seed = config['seed']
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=config['decay'])
+    time.time()
+    train_loss_list = []
+    device = get_device()
+    min_loss = 1e+8
+    i = 0
+    epoch = config['epoch']
+    early_stop_win = 15
+    model.train()
+    stop_improve_count = 0
+    dataloader = train_dataloader
 
-                train_loss += loss.item()
+    for i_epoch in range(epoch):
 
-            # 验证阶段
-            val_loss = self._validate(val_loader)
-            self.scheduler.step(val_loss)
+        if should_continue and not should_continue():  # 中断检查
+            print("Training stopped by user")
+            break
 
-            # 保存最佳模型
-            if val_loss < best_loss:
-                best_loss = val_loss
-                torch.save(self.model.state_dict(), 'best_stgcn.pth')
+        acu_loss = 0
+        model.train()
 
-            print(f"Train Loss: {train_loss / len(train_loader):.4f} | "
-                  f"Val Loss: {val_loss:.4f}")
+        for x, labels, attack_labels, edge_index in dataloader:
+            _start = time.time()
 
-    def _compute_loss(self, preds, recons, targets):
-        """计算组合损失"""
-        pred_loss = self.criterion['pred'](preds, targets)
-        recon_loss = self.criterion['recon'](recons, targets.unsqueeze(1))
-        return self.weights[0] * pred_loss + self.weights[1] * recon_loss
+            x, labels, edge_index = [item.float().to(device) for item in [x, labels, edge_index]]
 
-    def _validate(self, loader):
-        """验证阶段"""
-        self.model.eval()
-        total_loss = 0.0
-        with torch.no_grad():
-            for inputs, targets in loader:
-                inputs = inputs.to(self.device)
-                targets = targets.to(self.device)
+            optimizer.zero_grad()
+            out = model(x, edge_index).float().to(device)
+            loss = loss_func(out, labels)
+            
+            loss.backward()
+            optimizer.step()
 
-                preds, recons = self.model(inputs)
-                loss = self._compute_loss(preds, recons, targets)
-                total_loss += loss.item()
-        return total_loss / len(loader)
+            
+            train_loss_list.append(loss.item())
+            acu_loss += loss.item()
+                
+            i += 1
 
-    def _create_loader(self, data, batch_size, shuffle=False):
-        """创建数据加载器"""
-        dataset = TensorDataset(
-            data[0].cpu(),  # ✓ 确保数据在CPU
-            data[1].cpu()
-        )
-        return DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=shuffle,
-            pin_memory=True,  # ✓ 仅对CPU数据有效
-            num_workers=0,  # ✓ Windows必须设为0
-            persistent_workers=False  # ✓ 避免僵尸进程
-        )
+
+        # each epoch
+        print('epoch ({} / {}) (Loss:{:.8f}, ACU_loss:{:.8f})'.format(
+                        i_epoch+1, epoch,
+                        acu_loss/len(dataloader), acu_loss), flush=True
+            )
+
+
+
+        # use val dataset to judge
+        if val_dataloader is not None:
+
+            val_loss, val_result = test(model, val_dataloader)
+
+
+            if val_loss < min_loss:
+                torch.save(model.state_dict(), save_path)
+
+                min_loss = val_loss
+                stop_improve_count = 0
+            else:
+                stop_improve_count += 1
+
+
+            if stop_improve_count >= early_stop_win:
+                break
+
+        else:
+            if acu_loss < min_loss :
+                torch.save(model.state_dict(), save_path)
+                min_loss = acu_loss
+
+        if progress_callback:  # 回调触发
+            metrics = {
+                'epoch': i_epoch + 1,
+                'loss': acu_loss / len(dataloader),
+                'loss_history': train_loss_list
+            }
+            progress_callback(metrics)
+
+    return train_loss_list
+
