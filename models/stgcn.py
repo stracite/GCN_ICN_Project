@@ -1,97 +1,169 @@
-# models/stgcn.py
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from util.env import *
+from .graph_layer import GraphLayer
 
-from modules import GCN, DilatedTCN
+
+class OutLayer(nn.Module):
+    def __init__(self, in_num, node_num, layer_num, inter_num=512):
+        super(OutLayer, self).__init__()
+        modules = []
+        for i in range(layer_num):
+            if i == layer_num - 1:
+                modules.append(nn.Linear(in_num if layer_num == 1 else inter_num, 1))
+            else:
+                layer_in_num = in_num if i == 0 else inter_num
+                modules.append(nn.Linear(layer_in_num, inter_num))
+                modules.append(nn.BatchNorm1d(inter_num))
+                modules.append(nn.ReLU())
+        self.mlp = nn.ModuleList(modules)
+
+    def forward(self, x):
+        out = x
+        for mod in self.mlp:
+            if isinstance(mod, nn.BatchNorm1d):
+                out = out.permute(0, 2, 1)
+                out = mod(out)
+                out = out.permute(0, 2, 1)
+            else:
+                out = mod(out)
+        return out
+
+
+def get_batch_edge_index(org_edge_index, batch_num, node_num):
+    edge_index = org_edge_index.clone().detach()
+    edge_num = org_edge_index.shape[1]
+    batch_edge_index = edge_index.repeat(1, batch_num).contiguous()
+    for i in range(batch_num):
+        batch_edge_index[:, i * edge_num:(i + 1) * edge_num] += i * node_num
+    return batch_edge_index.long()
+
+
+class TemporalConv(nn.Module):
+    """时间卷积模块"""
+
+    def __init__(self, in_channels, out_channels, kernel_size=3, dilation=1):
+        super().__init__()
+        self.conv = nn.Conv1d(
+            in_channels,
+            out_channels,
+            kernel_size=kernel_size,
+            dilation=dilation,
+            padding=(dilation * (kernel_size - 1)) // 2
+        )
+        self.bn = nn.BatchNorm1d(out_channels)
+        self.relu = nn.ReLU()
+        self.channel_adjust = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else None
+
+    def forward(self, x):
+        residual = x
+        out = self.conv(x)
+        out = self.bn(out)
+        if self.channel_adjust:
+            residual = self.channel_adjust(residual)
+        return self.relu(out + residual)
 
 
 class STGCN(nn.Module):
-    """时空图卷积网络主模型
-    Args:
-        node_features (int): 每个节点的特征维度
-        hidden_dim (int): 隐藏层维度
-        adj_matrix (torch.Tensor): 邻接矩阵
-        time_window (int): 时间窗口大小
-        num_nodes (int): 节点数量
-        num_gcn_layers (int): GCN层数 (default: 2)
-        num_tcn_layers (int): TCN层数 (default: 2)
-        dropout (float): Dropout概率 (default: 0.2)
-    """
-
-    def __init__(self, node_features, hidden_dim, adj_matrix,
-                 time_window, num_nodes, num_gcn_layers=2,
-                 num_tcn_layers=2, dropout=0.2):
+    def __init__(self, edge_index_sets, node_num, dim=64, input_dim=10,
+                 out_layer_num=1, topk=20, use_tcn=True):
         super().__init__()
-        self.register_buffer('adj', adj_matrix)
-        self.num_nodes = num_nodes
-        self.time_window = time_window
+        self.edge_index_sets = edge_index_sets
+        self.node_num = node_num
+        self.dim = dim
+        self.topk = topk
+        self.input_dim = input_dim
+        self.embedding = nn.Embedding(node_num, dim)
+        self.bn_outlayer_in = nn.BatchNorm1d(dim)
+        edge_set_num = len(edge_index_sets)
 
-        # 空间特征提取模块
-        self.gcn_layers = nn.ModuleList([
-            GCN(node_features if i == 0 else hidden_dim,
-                hidden_dim,
-                adj_matrix)
-            for i in range(num_gcn_layers)
+        # 空间卷积层
+        self.gnn_layers = nn.ModuleList([
+            GraphLayer(input_dim, dim, inter_dim=dim + dim, heads=1)
+            for _ in range(edge_set_num)
         ])
 
-        # 时间特征提取模块
-        self.tcn_layers = nn.ModuleList([
-            DilatedTCN(hidden_dim, hidden_dim, dilation=2 ** i)
-            for i in range(num_tcn_layers)
-        ])
+        # 时间卷积层
+        self.use_tcn = use_tcn
+        if self.use_tcn:
+            self.tcn = nn.Sequential(
+                TemporalConv(dim * edge_set_num, dim * edge_set_num, dilation=1),
+                TemporalConv(dim * edge_set_num, dim * edge_set_num, dilation=2),
+                nn.AdaptiveAvgPool1d(1)
+            )
 
-        # 多任务输出头
-        self.pred_head = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, node_features)
-        )
+        # 输出层
+        self.out_layer = OutLayer(dim * edge_set_num, node_num, out_layer_num)
+        self.dp = nn.Dropout(0.2)
+        self.cache_edge_index_sets = [None] * edge_set_num
 
-        self.recon_head = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim * 2),
-            nn.ReLU(),
-            nn.Linear(hidden_dim * 2, node_features)
-        )
+    def init_params(self):
+        nn.init.kaiming_uniform_(self.embedding.weight, a=math.sqrt(5))
 
-        # 特征融合模块
-        self.fusion = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim * 2),
-            nn.BatchNorm1d(num_nodes),
-            nn.ReLU(),
-            nn.Dropout(dropout)
-        )
+    def forward(self, data, org_edge_index=None):
+        x = data.clone().detach()
+        batch_num, node_num, all_feature = x.shape
 
-    def forward(self, x):
-        """前向传播
-        Args:
-            x (torch.Tensor): 输入张量 (batch_size, time_window, num_nodes, node_features)
-        Returns:
-            tuple: (预测结果, 重构结果)
-        """
-        batch_size = x.size(0)
+        # 动态计算时间步长
+        seq_len = all_feature // self.input_dim
+        assert all_feature == self.input_dim * seq_len, \
+            f"特征维度{all_feature}必须等于input_dim({self.input_dim})×时间步长({seq_len})"
 
-        # 空间特征提取
-        spatial_feats = []
-        for t in range(self.time_window):
-            x_t = x[:, t, :, :]
-            for gcn in self.gcn_layers:
-                x_t = gcn(x_t)
-            spatial_feats.append(x_t)
-        spatial_feats = torch.stack(spatial_feats, dim=1)
+        # 维度重构 [B, N, D*T] -> [B*T, N, D]
+        x = x.view(batch_num, node_num, self.input_dim, seq_len)
+        x = x.permute(0, 3, 1, 2)  # [B, T, N, D]
+        x = x.contiguous().view(-1, node_num, self.input_dim)  # [B*T, N, D]
+        batch_size = x.shape[0]
+        x = x.view(-1, self.input_dim)  # [B*T*N, D]
 
-        # 时间特征提取
-        temporal_feats = spatial_feats
-        for tcn in self.tcn_layers:
-            temporal_feats = tcn(temporal_feats)
+        # 空间图卷积
+        gcn_outs = []
+        for i, edge_index in enumerate(self.edge_index_sets):
+            # 动态拓扑生成
+            all_embeddings = self.embedding(torch.arange(node_num).to(x.device))
+            weights = all_embeddings.detach()
+            cos_ji_mat = torch.matmul(weights, weights.T) / torch.matmul(
+                weights.norm(dim=-1).unsqueeze(1),
+                weights.norm(dim=-1).unsqueeze(0))
+            topk_indices_ji = torch.topk(cos_ji_mat, self.topk, dim=-1)[1]
 
-        # 时空特征融合
-        fused = torch.cat([spatial_feats, temporal_feats], dim=-1)
-        fused = self.fusion(fused.permute(0, 2, 1, 3)).permute(0, 2, 1, 3)
+            # 构建gated_edge_index
+            gated_i = torch.arange(node_num, device=x.device).unsqueeze(1).repeat(1, self.topk).flatten().unsqueeze(0)
+            gated_j = topk_indices_ji.flatten().unsqueeze(0)
+            gated_edge_index = torch.cat((gated_j, gated_i), dim=0)
+            batch_gated_edge_index = get_batch_edge_index(gated_edge_index, batch_size // seq_len, node_num).to(
+                x.device)
 
-        # 多任务输出
-        prediction = self.pred_head(fused[:, -1, :, :])
-        reconstruction = self.recon_head(fused)
+            # 图卷积处理
+            gcn_out = self.gnn_layers[i](x, batch_gated_edge_index,
+                                         embedding=all_embeddings.repeat(batch_size, 1))
+            gcn_outs.append(gcn_out)
 
-        return prediction, reconstruction
+        # 特征聚合
+        x = torch.cat(gcn_outs, dim=1)  # [B*T*N, C]
+        x = x.view(batch_size, node_num, -1)  # [B*T, N, C]
+        x = x.view(batch_num, seq_len, node_num, -1)  # [B, T, N, C]
+        x = x.permute(0, 2, 3, 1)  # [B, N, C, T]
+
+        # 时间卷积处理
+        if self.use_tcn:
+            x = x.contiguous().view(batch_num * node_num, -1, seq_len)  # [B*N, C, T]
+            x = self.tcn(x)  # [B*N, C, 1]
+            x = x.squeeze(-1)  # [B*N, C]
+            x = x.view(batch_num, node_num, -1)  # [B, N, C]
+
+        # 输出处理
+        indexes = torch.arange(node_num).to(x.device)
+        out = torch.mul(x, self.embedding(indexes))
+        out = out.permute(0, 2, 1)
+        out = F.relu(self.bn_outlayer_in(out))
+        out = out.permute(0, 2, 1)
+        out = self.dp(out)
+        out = self.out_layer(out)
+        return out.view(-1, node_num)  # [B*N, 1]
+
+    def __repr__(self):
+        return f"STGCN(input_dim={self.input_dim}, dim={self.dim}, " + \
+            f"edge_sets={len(self.edge_index_sets)}, tcn={self.use_tcn})"
