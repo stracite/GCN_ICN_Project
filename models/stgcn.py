@@ -2,7 +2,6 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from util.env import *
 from .graph_layer import GraphLayer
 
 
@@ -67,8 +66,8 @@ class TemporalConv(nn.Module):
 
 
 class STGCN(nn.Module):
-    def __init__(self, edge_index_sets, node_num, dim=64, input_dim=10,
-                 out_layer_num=1, topk=20, use_tcn=True):
+    def __init__(self, edge_index_sets, node_num, dim, input_dim,
+                 out_layer_num, topk):
         super().__init__()
         self.edge_index_sets = edge_index_sets
         self.node_num = node_num
@@ -86,13 +85,12 @@ class STGCN(nn.Module):
         ])
 
         # 时间卷积层
-        self.use_tcn = use_tcn
-        if self.use_tcn:
-            self.tcn = nn.Sequential(
-                TemporalConv(dim * edge_set_num, dim * edge_set_num, dilation=1),
-                TemporalConv(dim * edge_set_num, dim * edge_set_num, dilation=2),
-                nn.AdaptiveAvgPool1d(1)
-            )
+
+        self.tcn = nn.Sequential(
+            TemporalConv(dim * edge_set_num, dim * edge_set_num, dilation=1),
+            TemporalConv(dim * edge_set_num, dim * edge_set_num, dilation=2),
+            nn.AdaptiveAvgPool1d(1)
+        )
 
         # 输出层
         self.out_layer = OutLayer(dim * edge_set_num, node_num, out_layer_num)
@@ -148,11 +146,11 @@ class STGCN(nn.Module):
         x = x.permute(0, 2, 3, 1)  # [B, N, C, T]
 
         # 时间卷积处理
-        if self.use_tcn:
-            x = x.contiguous().view(batch_num * node_num, -1, seq_len)  # [B*N, C, T]
-            x = self.tcn(x)  # [B*N, C, 1]
-            x = x.squeeze(-1)  # [B*N, C]
-            x = x.view(batch_num, node_num, -1)  # [B, N, C]
+
+        x = x.contiguous().view(batch_num * node_num, -1, seq_len)  # [B*N, C, T]
+        x = self.tcn(x)  # [B*N, C, 1]
+        x = x.squeeze(-1)  # [B*N, C]
+        x = x.view(batch_num, node_num, -1)  # [B, N, C]
 
         # 输出处理
         indexes = torch.arange(node_num).to(x.device)

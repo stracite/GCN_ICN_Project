@@ -1,5 +1,9 @@
-.vscode/
-.idea/
-.DS_Store/
-__pycache__/
-*.pyc
+pretrained/
+results/
+logs/
+runs/
+temp/
+run_copy.sh
+__pycache__
+SWaT
+WaDi
