@@ -1,6 +1,8 @@
 # ui/train_ui.py
 import random
 import sys
+import traceback
+
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget,
                              QVBoxLayout, QHBoxLayout, QGroupBox,
                              QPushButton, QTextEdit, QComboBox,
@@ -53,9 +55,15 @@ class TrainingThread(QThread):
             self.update_score.emit(score)
 
 
+
         except Exception as e:
-            self.update_log.emit(f"训练异常: {str(e)}")
+
+            error_msg = f"训练异常:\n{traceback.format_exc()}"  # 包含完整堆栈
+
+            self.update_log.emit(error_msg)
+
         finally:
+
             self.training_finished.emit()
 
     def stop(self):
@@ -88,7 +96,7 @@ class TrainingWindow(QMainWindow):
 
         self.epoch_spin = QSpinBox()
         self.epoch_spin.setRange(1, 10240)
-        self.epoch_spin.setValue(512)
+        self.epoch_spin.setValue(256)
 
         self.slide_win_spin = QSpinBox()
         self.slide_win_spin.setRange(1, 30)

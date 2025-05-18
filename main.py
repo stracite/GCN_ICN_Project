@@ -7,7 +7,7 @@ from util.env import get_device, set_device
 from util.preprocess import build_loc_net, construct_data
 from util.net_struct import get_feature_map, get_fc_graph_struc
 from datasets.TimeDataset import TimeDataset
-from models.STGCN import STGCN
+from models.stgcn import STGCN
 from train import train
 from test  import test
 from evaluate import get_best_performance_data, get_val_performance_data, get_full_err_scores
