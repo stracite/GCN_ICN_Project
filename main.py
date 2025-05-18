@@ -143,8 +143,6 @@ class Main():
         top1_val_info = get_val_performance_data(test_scores, normal_scores, test_labels, topk=1)
 
 
-        # print('=========================** Result **============================\n')
-
         info = None
         if self.env_config['report'] == 'best':
             info = top1_best_info

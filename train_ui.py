@@ -11,10 +11,8 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from main import Main
 from matplotlib import rcParams
 
-
-# 设置中文字体（必须在导入其他matplotlib模块前配置）
-rcParams['font.sans-serif'] = ['SimHei']  # Windows系统常用黑体
-rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+rcParams['font.sans-serif'] = ['SimHei']
+rcParams['axes.unicode_minus'] = False
 
 
 
@@ -82,7 +80,7 @@ class TrainingWindow(QMainWindow):
 
         # 新增参数控件
         self.dataset_combo = QComboBox()
-        self.dataset_combo.addItems(['msl'])
+        self.dataset_combo.addItems(['swat','wadi'])
 
         self.batch_spin = QSpinBox()
         self.batch_spin.setRange(32, 10240)
@@ -181,6 +179,7 @@ class TrainingWindow(QMainWindow):
         ax.clear()
         self.canvas.draw()
 
+
         train_config = {
             'batch': self.batch_spin.value(),
             'epoch': self.epoch_spin.value(),
@@ -197,7 +196,7 @@ class TrainingWindow(QMainWindow):
         }
 
         env_config = {
-            'dataset': 'msl',
+            'dataset': self.dataset_combo.currentText(),
             'save_path': 'msl',
             'device': self.device_combo.currentText(),
             'report': 'best',
@@ -225,7 +224,7 @@ class TrainingWindow(QMainWindow):
                 f.write(self.score_output.toPlainText())
 
     def update_score(self, score):
-        score_text = f"""最终评估结果：
+        score_text = f"""results：
         F1 Score: {score['f1']:.4f}
         Precision: {score['precision']:.4f}
         Recall: {score['recall']:.4f}"""
@@ -236,7 +235,7 @@ class TrainingWindow(QMainWindow):
         ax.clear()
         ax.plot(metrics['loss_history'], label='训练损失', color='#1f77b4')
         ax.set_title("训练损失曲线")
-        ax.set_xlabel("迭代次数")
+        ax.set_xlabel("训练次数")
         ax.set_ylabel("损失值")
         ax.legend()
         ax.grid(True)
