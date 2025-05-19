@@ -2,6 +2,7 @@
 import random
 import sys
 import traceback
+from datetime import datetime
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget,
                              QVBoxLayout, QHBoxLayout, QGroupBox,
@@ -50,7 +51,8 @@ class TrainingThread(QThread):
             score = {
                 'f1': main.final_scores['f1'],
                 'precision': main.final_scores['precision'],
-                'recall': main.final_scores['recall']
+                'recall': main.final_scores['recall'],
+                'alerts': main.final_scores.get('alerts', [])
             }
             self.update_score.emit(score)
 
@@ -77,6 +79,7 @@ class TrainingWindow(QMainWindow):
         self.setup_connections()
         self.setWindowTitle("STGCN 训练监控系统")
         self.resize(1200, 800)
+        self.alert_counts = {'low': 0, 'medium': 0, 'high': 0}
 
     def init_ui(self):
         main_widget = QWidget()
@@ -91,15 +94,15 @@ class TrainingWindow(QMainWindow):
         self.dataset_combo.addItems(['swat','wadi'])
 
         self.batch_spin = QSpinBox()
-        self.batch_spin.setRange(32, 10240)
+        self.batch_spin.setRange(32, 102400)
         self.batch_spin.setValue(10240)
 
         self.epoch_spin = QSpinBox()
         self.epoch_spin.setRange(1, 10240)
-        self.epoch_spin.setValue(256)
+        self.epoch_spin.setValue(100)
 
         self.slide_win_spin = QSpinBox()
-        self.slide_win_spin.setRange(1, 30)
+        self.slide_win_spin.setRange(1, 32)
         self.slide_win_spin.setValue(16)
 
         self.device_combo = QComboBox()
@@ -111,7 +114,7 @@ class TrainingWindow(QMainWindow):
         self.decay_spin.setValue(0.005)
 
         self.out_layer_num_spin = QSpinBox()
-        self.out_layer_num_spin.setRange(1, 5)
+        self.out_layer_num_spin.setRange(1, 8)
         self.out_layer_num_spin.setValue(1)
 
         self.topk_spin = QSpinBox()
@@ -232,10 +235,28 @@ class TrainingWindow(QMainWindow):
                 f.write(self.score_output.toPlainText())
 
     def update_score(self, score):
-        score_text = f"""results：
+        # 解析告警等级数据
+        alert_levels = score.get('alerts', [])
+        if alert_levels:
+            # 统计各等级告警数量
+            alert_counts = {
+                'CRITICAL (Level 2)': alert_levels.count(2),
+                'WARNING (Level 1)': alert_levels.count(1),
+                'NOTICE (Level 0)': alert_levels.count(0)
+            }
+            alert_text = "\n        ".join([f"{k}: {v}" for k, v in alert_counts.items()])
+        else:
+            alert_text = "无告警数据"
+
+        # 格式化评分和告警信息
+        score_text = f"""Results：
         F1 Score: {score['f1']:.4f}
         Precision: {score['precision']:.4f}
-        Recall: {score['recall']:.4f}"""
+        Recall: {score['recall']:.4f}
+
+        === 告警统计 ===
+        {alert_text}"""
+
         self.score_output.setPlainText(score_text)
 
     def update_metrics(self, metrics):
@@ -247,6 +268,11 @@ class TrainingWindow(QMainWindow):
         ax.set_ylabel("损失值")
         ax.legend()
         ax.grid(True)
+        # ===== 新增：实时告警检查 =====
+        if 'recon' in metrics and 'rmse' in metrics:
+            combined_score = 0.6*metrics['rmse'] + 0.4*metrics['recon']
+            if combined_score > 0.5:
+                self.trigger_alert(combined_score)
         self.canvas.draw()
 
     def update_log(self, log):
@@ -254,6 +280,21 @@ class TrainingWindow(QMainWindow):
 
     def on_training_finished(self):
         self.start_btn.setEnabled(True)
+
+    def trigger_alert(self, score):
+        """根据评分触发告警"""
+        if score > 1.0:
+            level = "CRITICAL"
+            self.alert_counts['high'] += 1
+        elif score > 0.7:
+            level = "WARNING"
+            self.alert_counts['medium'] += 1
+        else:
+            level = "NOTICE"
+            self.alert_counts['low'] += 1
+
+        log_msg = f"[{datetime.now().strftime('%H:%M:%S')}] {level} Alert! Score: {score:.2f}"
+        self.log_output.append(log_msg)  # 在日志面板显示
 
 
 if __name__ == "__main__":

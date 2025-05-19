@@ -54,7 +54,7 @@ class TimeDataset(Dataset):
             tar = data[:, i]
             x_arr.append(ft)
             y_arr.append(tar)
-            labels_arr.append([labels[i]] * node_num)
+            labels_arr.append([labels[i]])
         x = torch.stack(x_arr).contiguous()
         y = torch.stack(y_arr).contiguous()
         labels = torch.Tensor(labels_arr).contiguous()

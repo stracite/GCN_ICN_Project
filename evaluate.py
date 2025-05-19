@@ -1,7 +1,8 @@
-from util.data import *
 import numpy as np
 from sklearn.metrics import precision_score, recall_score, roc_auc_score, f1_score
-from scipy.stats import gamma
+
+from util.data import *
+
 
 def get_full_err_scores(test_result, val_result):
     np_test_result = np.array(test_result)
@@ -35,8 +36,8 @@ def get_final_err_scores(test_result, val_result):
     return all_scores
 
 def get_err_scores(test_res, val_res):
-    test_predict, test_gt = test_res
-    val_predict, val_gt = val_res
+    test_predict, test_gt = test_res[0], test_res[2]  # test_res 格式 [pred, recon, labels]
+    val_predict, val_gt = val_res[0], val_res[2]
     n_err_mid, n_err_iqr = get_err_median_and_iqr(test_predict, test_gt)
     test_delta = np.abs(np.subtract(
                         np.array(test_predict).astype(np.float64), 
@@ -98,3 +99,49 @@ def get_best_performance_data(total_err_scores, gt_labels, topk=1):
     rec = recall_score(gt_labels, pred_labels)
     auc_score = roc_auc_score(gt_labels, total_topk_err_scores)
     return max(final_topk_fmeas), pre, rec, auc_score, thresold
+
+
+def dynamic_threshold(errors, window=64):
+    """滑动窗口动态阈值（改进版使用中位数和IQR）"""
+    thresholds = []
+    for i in range(len(errors)):
+        start = max(0, i - window // 2)
+        end = min(len(errors), i + window // 2)
+        window_errors = errors[start:end]
+
+        # 异常值处理：移除窗口内前5%的极端值
+        if len(window_errors) > 10:
+            q95 = np.percentile(window_errors, 95)
+            window_errors = window_errors[window_errors <= q95]
+
+        # 使用中位数和IQR替代均值和标准差（更鲁棒）
+        median = np.median(window_errors)
+        q1 = np.percentile(window_errors, 25)
+        q3 = np.percentile(window_errors, 75)
+        iqr = max(q3 - q1, 1e-6)  # 防止除零
+
+        # 调整阈值系数（原3σ对应约2.22iqr）
+        thresholds.append(median + 1.5 * iqr)  # 系数可调
+
+    return np.array(thresholds)
+
+def fuse_anomaly_scores(pred_errors, recon_errors, weights=(0.6, 0.4)):
+    # 确保 pred_errors 是单维
+    if pred_errors.ndim > 1:
+        pred_errors = np.mean(pred_errors, axis=1)  # 多特征取平均
+    """多指标融合（预测误差 + 重构误差）"""
+    pred_norm = (pred_errors - np.min(pred_errors)) / (np.ptp(pred_errors) + 1e-8)
+    recon_norm = (recon_errors - np.min(recon_errors)) / (np.ptp(recon_errors) + 1e-8)
+    return weights[0] * pred_norm + weights[1] * recon_norm
+
+def calc_anomaly_level(combined_scores, thresholds):
+    """生成告警等级（0-正常，1-警告，2-严重）"""
+    levels = []
+    for score, thresh in zip(combined_scores, thresholds):
+        if score > thresh * 1.5:
+            levels.append(2)
+        elif score > thresh:
+            levels.append(1)
+        else:
+            levels.append(0)
+    return np.array(levels)

@@ -1,10 +1,38 @@
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.preprocessing import MinMaxScaler
+
 from .graph_layer import ChebGCN, MultiScaleTemporalBlock
 
+
+class ST_VAE(nn.Module):
+    def __init__(self, fused_dim, hidden_dim, output_dim):
+        super().__init__()
+        # Encoder: 融合特征 -> 潜在空间
+        self.encoder = nn.Sequential(
+            nn.Linear(fused_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim // 2 * 2)  # 输出mu和logvar
+        )
+
+        # Decoder: 潜在空间 -> 目标输出维度
+        self.decoder = nn.Sequential(
+            nn.Linear(hidden_dim // 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim)  # 输出维度对齐input_dim=16
+        )
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def forward(self, x):
+        h = self.encoder(x)
+        mu, logvar = torch.chunk(h, 2, dim=-1)
+        z = self.reparameterize(mu, logvar)
+        return self.decoder(z), mu, logvar
 
 class OutLayer(nn.Module):
     def __init__(self, in_num, node_num, layer_num, inter_num=512):
@@ -48,8 +76,7 @@ def norm(train, test):
 
 
 class STGCN(nn.Module):
-    def __init__(self, edge_index_sets, node_num, dim, input_dim,
-                 out_layer_num, topk):
+    def __init__(self, edge_index_sets, node_num, dim, input_dim, out_layer_num, topk):
         super().__init__()
         self.edge_index_sets = edge_index_sets
         self.node_num = node_num
@@ -59,6 +86,11 @@ class STGCN(nn.Module):
         self.embedding = nn.Embedding(node_num, dim)
         self.bn_outlayer_in = nn.BatchNorm1d(dim)
         edge_set_num = len(edge_index_sets)
+
+        self.attention = nn.Sequential(
+            nn.Linear(dim * len(edge_index_sets), dim),
+            nn.Sigmoid()
+        )
         # 空间卷积层
         self.gnn_layers = nn.ModuleList([
             ChebGCN(input_dim, dim, K=1)  # K=1 表示一阶切比雪夫近似
@@ -82,8 +114,22 @@ class STGCN(nn.Module):
         self.dp = nn.Dropout(0.2)
         self.cache_edge_index_sets = [None] * edge_set_num
 
-    def init_params(self):
-        nn.init.kaiming_uniform_(self.embedding.weight, a=math.sqrt(5))
+        # ============ 新增多任务输出层 ============
+        # 预测任务MLP
+        self.predictor = nn.Sequential(
+            nn.Linear(dim * len(edge_index_sets), dim),  # ✅ 明确输入输出维度
+            nn.ReLU(),
+            nn.Linear(dim, 1)
+        )
+
+        # 重构任务VAE
+        self.vae = ST_VAE(
+            fused_dim=dim * len(edge_index_sets),  # 输入维度=融合特征维度
+            hidden_dim=dim,
+            output_dim=input_dim  # 输出维度=原始输入特征维度
+        )
+
+
 
     def forward(self, data, org_edge_index=None):
         x = data.clone().detach()
@@ -127,8 +173,24 @@ class STGCN(nn.Module):
         # 时空特征融合
         fused_features = torch.cat([x_spatial, x_temporal], dim=-1)  # [B, N, (dim*edge_set_num + temporal_features)]
         fused_features = self.fusion_layer(fused_features)  # [B, N, fused_dim]
+        # 新增注意力权重
+        attn_weights = self.attention(fused_features)  # [B, N, dim]
+        fused_features = fused_features * attn_weights  # 特征加权
 
-        # 输出处理（需调整）
+        # 预测任务输出 [B, N, 1]
+        pred_output = self.predictor(fused_features)
+        # 调整维度为 [B, N]（与真实标签对齐）
+        pred_output = pred_output.squeeze(-1)
+
+        # 重构任务处理
+        vae_input = fused_features.view(-1, fused_features.size(-1))  # [B*N, fused_dim=64]
+        recon_output, mu, logvar = self.vae(vae_input)  # 输出 [B*N, output_dim=16]
+
+        # 调整重构输出维度 [B, N, input_dim=16]
+        recon_output = recon_output.view(batch_num, self.node_num, self.input_dim)
+
+
+        # 输出处理
         indexes = torch.arange(node_num).to(x.device)
         embedding = self.embedding(indexes)  # [N, dim]
         # 调整 embedding 维度以匹配 fused_features
@@ -142,10 +204,13 @@ class STGCN(nn.Module):
         out = F.relu(self.bn_outlayer_in(out))
         out = out.permute(0, 2, 1)  # [B, N, dim]
         out = self.dp(out)
-        out = self.out_layer(out)  # 输入维度需匹配
+        out = self.out_layer(out).view(-1, node_num)  # 输入维度需匹配 [B*N, 1]
 
-        return out.view(-1, node_num)  # [B*N, 1]
 
-    def __repr__(self):
-        return f"STGCN(input_dim={self.input_dim}, dim={self.dim}, " + \
-            f"edge_sets={len(self.edge_index_sets)}, tcn={self.use_tcn})"
+        return out, pred_output, recon_output, mu, logvar
+
+    # def __repr__(self):
+    #     return f"STGCN(input_dim={self.input_dim}, dim={self.dim}, " + \
+    #         f"edge_sets={len(self.edge_index_sets)}, tcn={self.use_tcn})"
+
+
