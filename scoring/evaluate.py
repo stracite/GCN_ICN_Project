@@ -1,10 +1,21 @@
 import numpy as np
-import torch
-import torch.nn.functional as F
 
 
 def dynamic_threshold(errors, window=64):
-    """滑动窗口动态阈值（使用中位数和IQR）"""
+    """滑动窗口动态阈值（使用中位数和IQR）
+
+    Args:
+        errors : 输入误差序列，形状为[num_samples]
+        window : 滑动窗口大小，默认为64
+
+    Returns:
+        array: 动态阈值序列，形状与errors相同
+
+    实现逻辑：
+        1. 对每个数据点使用中心对称滑动窗口
+        2. 移除窗口内前5%的极端值（当窗口数据>10时生效）
+        3. 基于中位数和四分位距(IQR)计算动态阈值
+    """
     thresholds = []
     for i in range(len(errors)):
         start = max(0, i - window // 2)
@@ -27,7 +38,23 @@ def dynamic_threshold(errors, window=64):
 
     return np.array(thresholds)
 
+
 def fuse_anomaly_scores(pred_errors, recon_errors, weights):
+    """多指标异常分数融合器
+
+
+    Args:
+        pred_errors : 预测误差序列，形状为[num_samples]
+        recon_errors : 重构误差序列，形状为[num_samples]
+        weights : 融合权重，格式为(pred_weight, recon_weight)
+    Returns:
+        array: 融合后的综合异常分数，形状为[num_samples]
+
+    处理流程：
+        1. 对多维预测误差进行平均化处理
+        2. 对两个误差序列分别进行归一化
+        3. 按权重线性组合得到最终分数
+    """
     # 确保 pred_errors 是单维
     if pred_errors.ndim > 1:
         pred_errors = np.mean(pred_errors, axis=1)  # 多特征取平均
@@ -37,7 +64,20 @@ def fuse_anomaly_scores(pred_errors, recon_errors, weights):
     return weights[0] * pred_norm + weights[1] * recon_norm
 
 def calc_anomaly_level(combined_scores, thresholds):
-    """生成告警等级（0-正常，1-警告，2-严重）"""
+    """异常等级分类器
+
+    Args:
+        combined_scores : 综合异常分数，形状为[num_samples]
+        thresholds : 动态阈值序列，形状为[num_samples]
+
+    Returns:
+        array: 异常等级序列，0-正常，1-警告，2-严重
+
+    分级规则：
+        - 超过阈值1.5倍：2级（严重）
+        - 超过阈值但不足1.5倍：1级（警告）
+        - 低于阈值：0级（正常）
+    """
     levels = []
     for score, thresh in zip(combined_scores, thresholds):
         if score > thresh * 1.5:
@@ -47,22 +87,3 @@ def calc_anomaly_level(combined_scores, thresholds):
         else:
             levels.append(0)
     return np.array(levels)
-
-def loss_func(y_pred, y_true, x_recon, x_orig, mu, logvar):
-    # 预测任务RMSE
-    rmse_loss = torch.sqrt(F.mse_loss(y_pred, y_true))
-
-    # 重构任务损失（展平为 [B*N, slide_win]）
-    x_recon_flat = x_recon.view(-1, x_recon.size(-1))  # [batch*node_num, input_dim]
-    x_orig_flat = x_orig.view(-1, x_orig.size(-1))     # [batch*node_num, input_dim]
-    recon_loss = F.mse_loss(x_recon_flat, x_orig_flat)
-    kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / (x_orig.size(0) * x_orig.size(1))   # 归一化KL散度
-
-    # 总损失（权重可调整）
-    total_loss = 0.5 * rmse_loss + 0.4 * recon_loss + 0.1 * kl_loss
-    return total_loss, {
-        'total': total_loss.item(),
-        'rmse': rmse_loss.item(),
-        'recon': recon_loss.item(),
-        'kl': kl_loss.item()
-    }
